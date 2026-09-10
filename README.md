@@ -26,11 +26,17 @@ sgBusLaoBu2021 project pending fuller documentation and setup notes. This pass s
 
 ## Setup
 
-Install dependencies for the detected stack and run the existing entry point. Keep secrets in ignored environment files.
+Use Python 3.12 and install the pinned dependencies with `python -m pip install -r requirements.txt`. Start the local app with `python main.py`, or import `main:app` with a WSGI server. Vercel deploys the `master` branch as the Flask app at https://sgbuslaobu.hong-yi.me.
 
 ## Usage
 
-Review the source tree for current commands. Add exact deployment and demo details once the showcase URL is confirmed.
+Choose a search radius from 0.1 to 1 km and enter coordinates or use browser geolocation. The server checks finite coordinate/radius bounds before querying. Results use forward stop sequences in the packaged route dataset; station entries without a known mapping are skipped.
+
+Bus data remains in the bundled SQLite database and CSV/JSON files. Search connections open SQLite in read-only mode and close after fetching rows. Each search reuses the stop sequences from those rows instead of querying again for each result; station names are cached for the process lifetime. Data-file changes require restarting/redeploying the app.
+
+Normal searches no longer append coordinates to the legacy debug-history files or log the submitted form. Existing history files are retained. Responses containing submitted coordinates use `private, no-store`. The legacy `/coordinates` viewer remains a separate, older feature requiring further review.
+
+Run `python -B -m unittest discover -s tests -v` for search validation, route ordering, missing station mappings, geolocation compatibility and privacy regressions. Tests stub historical-coordinate I/O. GitHub runs these checks on relevant pushes and pull requests. The bundled transit dataset is historical; these checks do not verify current bus schedules or route changes.
 
 ## License
 

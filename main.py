@@ -1,7 +1,8 @@
-from flask import *
-import os
+from collections import defaultdict
+from math import isfinite
+from flask import Flask, render_template, request
 
-from functions import coordinates_2_txt, BusStops, BusCompanies, export_json, import_json
+from functions import BusStops, BusCompanies, DATA_DIR
 from sqlcommands import commands
 
 #-------------------------------------
@@ -9,7 +10,7 @@ from sqlcommands import commands
 '''Initiating instance objects needed'''
 
 stops = BusStops()
-companies = BusCompanies("data/json/bus_services.json")
+companies = BusCompanies(str(DATA_DIR / 'json' / 'bus_services.json'))
 
 '''Creating static mrt data for displaying'''
 
@@ -46,15 +47,11 @@ app = Flask(__name__, template_folder='templates')
 
 @app.after_request
 def add_header(r):
-    """
-    Add headers to both force latest IE rendering engine or Chrome Frame,
-    and also to cache the rendered page for 10 minutes.
-    """
-    r.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    r.headers["Pragma"] = "no-cache"
-    r.headers["Expires"] = "0"
-    r.headers['Cache-Control'] = 'public, max-age=0'
-    r.cache_control.max_age = 0
+    """Keep submitted coordinates out of shared response caches."""
+    if request.endpoint in {'findabus', 'coordinates'} or request.method != 'GET':
+        r.headers['Cache-Control'] = 'private, no-store'
+    else:
+        r.headers['Cache-Control'] = 'public, max-age=0'
     return r
 
 
@@ -83,86 +80,54 @@ def learnbusfacts():
 
 @app.route('/findabus', methods=['POST'])
 def findabus():
-    if request.method == "POST":
-        print(request.form)
-        data = []
+    manual_lat = request.form.get('latitude1', '').strip()
+    manual_lon = request.form.get('longitude1', '').strip()
+    userlat = manual_lat if manual_lat or manual_lon else request.form.get('latitude')
+    userlon = manual_lon if manual_lat or manual_lon else request.form.get('longitude')
+    try:
+        ra, userlat, userlon = float(request.form.get('slider')), float(userlat), float(userlon)
+        if not all(isfinite(value) for value in (ra, userlat, userlon)):
+            raise ValueError('Non-finite input')
+        if not (-90 <= userlat <= 90 and -180 <= userlon <= 180 and 0.1 <= ra <= 1.0):
+            raise ValueError('Outside supported bounds')
+    except (TypeError, ValueError):
+        return render_template('getyourlocation.html', ra='0.2',
+                               error='Enter valid latitude and longitude, and a radius between 0.1 and 1 km.',
+                               latitude=manual_lat, longitude=manual_lon), 400
 
-        if request.form.get("longitude1") and request.form.get("latitude1") is not None:
-            userlon = request.form.get("longitude1") #type: string
-            userlat = request.form.get("latitude1") #type: string
-        else:
-            userlon = request.form.get("longitude") #type: string
-            userlat = request.form.get("latitude") #type: string
-        ra = request.form.get("slider") #type: string
+    nearby = stops.getbusstopdistance(commands['selectfromdatabase'], userlat=userlat, userlon=userlon, radius=ra)
+    destinations = defaultdict(list)
+    for station_stop in allmrtbusstops:
+        destinations[(station_stop['ServiceNo'], station_stop['Direction'])].append(station_stop)
 
-        try:
-            ra, userlon, userlat = float(ra), float(userlon), float(userlat)
-        except:
-            ra = '0.2'
-            return render_template('getyourlocation.html', ra=ra)
-        else:
-
-            d = { "lat":float(userlat), "lng":float(userlon) }
-            jlis = import_json()
-            jlis.append(d)
-            export_json(jlis)
-            coordinates_2_txt(userlon,userlat)
-
-            allbusstops = stops.getbusstopdistance(commands["selectfromdatabase"], userlat=userlat, userlon=userlon, radius=ra)
-
-            for busstop in allbusstops:
-                for mrtbusstop in allmrtbusstops:
-
-                    if busstop['ServiceNo'] == mrtbusstop['ServiceNo'] and busstop['Direction'] == mrtbusstop['Direction']:
-                        mrtstation, mrtline = stops.description_2_mrtname(mrtbusstop['Description'])
-
-                        busstopcode = busstop['BusStopCode']
-                        mrtbusstopcode = mrtbusstop['BusStopCode']
-                        serviceno = busstop['ServiceNo']
-                        direction = busstop['Direction']
-
-                        startsequence = stops.findstopsequence(commands["findstopsequence"], direction=str(direction), serviceno=str(serviceno),busstopcode=str(busstopcode))
-
-                        endsequence = stops.findstopsequence(commands["findstopsequence"], direction=str(direction), serviceno=str(serviceno),busstopcode=str(mrtbusstopcode))
-
-                        numberofstops = abs(int(startsequence) - int(endsequence))
-                        distance_metres_rounded = int(busstop['Distance']*1000)
-
-                        # Determine MRT Line Color
-                        if 'North-South' in mrtline: mrt_color = '#d42e12'
-                        elif 'East-West' in mrtline: mrt_color = '#009645'
-                        elif 'North-East' in mrtline: mrt_color = '#9900aa'
-                        elif 'Circle' in mrtline: mrt_color = '#fa9e0d'
-                        elif 'Downtown' in mrtline: mrt_color = '#005ec4'
-                        elif 'Thomson' in mrtline: mrt_color = '#9d5b25'
-                        else: mrt_color = '#64748b'
-
-                        dic = {
-                            "mrt_station": mrtstation,
-                            "mrt_line": mrtline,
-                            "mrt_color": mrt_color,
-                            "walkdistance": f"{distance_metres_rounded}m",
-                            "board_busstopdescription": busstop['Description'].title(),
-                            "busstopcode": busstopcode,
-                            "busservice": serviceno,
-                            "numberofstops": numberofstops,
-                            "alight_busstopdescription": mrtbusstop['Description'].title(),
-                            "busstoplat": busstop['BusStopLat'],
-                            "busstoplon": busstop['BusStopLon']
-                        }
-                        data.append(dic)
-
-                    else:
-                        pass
-            
-            # Sort data by walking distance
-            data.sort(key=lambda x: int(x['walkdistance'][:-1]))
-            
-            return render_template('findabus.html', userlon = userlon, userlat = userlat, data=data, ra=ra)
-
-
-    else:
-        return render_template('getyourlocation.html')
+    data = []
+    for busstop in nearby:
+        for station_stop in destinations[(busstop['ServiceNo'], busstop['Direction'])]:
+            numberofstops = int(station_stop['StopSequence']) - int(busstop['StopSequence'])
+            if numberofstops <= 0:
+                continue
+            station = stops.description_2_mrtname(station_stop['Description'])
+            if station is None:
+                continue
+            mrtstation, mrtline = station
+            if 'North-South' in mrtline: mrt_color = '#d42e12'
+            elif 'East-West' in mrtline: mrt_color = '#009645'
+            elif 'North-East' in mrtline: mrt_color = '#9900aa'
+            elif 'Circle' in mrtline: mrt_color = '#fa9e0d'
+            elif 'Downtown' in mrtline: mrt_color = '#005ec4'
+            elif 'Thomson' in mrtline: mrt_color = '#9d5b25'
+            else: mrt_color = '#64748b'
+            data.append({
+                'mrt_station': mrtstation, 'mrt_line': mrtline, 'mrt_color': mrt_color,
+                'walkdistance': f"{int(busstop['Distance'] * 1000)}m",
+                'board_busstopdescription': busstop['Description'].title(),
+                'busstopcode': busstop['BusStopCode'], 'busservice': busstop['ServiceNo'],
+                'numberofstops': numberofstops,
+                'alight_busstopdescription': station_stop['Description'].title(),
+                'busstoplat': busstop['BusStopLat'], 'busstoplon': busstop['BusStopLon'],
+            })
+    data.sort(key=lambda item: int(item['walkdistance'][:-1]))
+    return render_template('findabus.html', userlon=userlon, userlat=userlat, data=data, ra=ra)
 
 
 @app.route('/help', methods=['GET'])

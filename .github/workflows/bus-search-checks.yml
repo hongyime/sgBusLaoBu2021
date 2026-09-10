@@ -1,0 +1,43 @@
+name: Bus search checks
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '**/*.py'
+      - 'templates/**'
+      - 'data/database/**'
+      - 'data/csv/**'
+      - 'data/json/**'
+      - 'requirements.txt'
+      - '.github/workflows/bus-search-checks.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - '**/*.py'
+      - 'templates/**'
+      - 'data/database/**'
+      - 'data/csv/**'
+      - 'data/json/**'
+      - 'requirements.txt'
+      - '.github/workflows/bus-search-checks.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bus-search-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - run: python -B -m unittest discover -s tests -v

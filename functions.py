@@ -1,7 +1,30 @@
 import json
 import csv
 import sqlite3
+from contextlib import closing
+from functools import lru_cache
+from pathlib import Path
 from math import radians, cos, sin, asin, sqrt
+
+DATA_DIR = Path(__file__).resolve().parent / 'data'
+DATABASE_PATH = DATA_DIR / 'database' / 'main.db'
+
+
+def _read_bus_rows(command: str, parameters: tuple = ()) -> list[sqlite3.Row]:
+    """Read packaged route data without creating or writing a database."""
+    with closing(sqlite3.connect(DATABASE_PATH.as_uri() + '?mode=ro', uri=True)) as con:
+        con.row_factory = sqlite3.Row
+        return con.execute(command, parameters).fetchall()
+
+
+@lru_cache(maxsize=1)
+def _station_lookup() -> dict[str, tuple[str, str]]:
+    """The station CSV is static for a deployment; read it once per process."""
+    stations = {}
+    with open(DATA_DIR / 'csv' / 'stations.csv', newline='', encoding='utf-8') as handle:
+        for row in csv.DictReader(handle):
+            stations.setdefault(row['mrtbusstopdescription'], (row['mrtstation'], row['mrtline']))
+    return stations
 
 def coordinates_2_txt(userlon=None, userlat=None):
     '''
@@ -83,7 +106,7 @@ def haversine(lat1,lon1,lat2,lon2):
     delta_lon = lon2 - lon1
     delta_lat = lat2 - lat1
     a = sin(delta_lat/2)**2 + cos(lat1) * cos(lat2) * sin(delta_lon/2)**2
-    c = 2 * asin(sqrt(a)) 
+    c = 2 * asin(sqrt(min(1.0, max(0.0, a))))
     r = 6371 # Radius of earth in kilometers. Use 3956 for miles
     return c * r
 
@@ -111,18 +134,10 @@ class BusStops:
         '''
         input description of mrt bus stop, returns mrt station and mrt line
         '''
-        mrtnames = []
         if type(description) is not str:
             print("Please input description as a string.")
         else:
-            with open("data/csv/stations.csv", "r", newline="") as f:            
-                data = csv.DictReader(f)
-                for dic in data:
-                    mrtnames.append(dic)
-            for mrt in mrtnames:
-                if description == mrt['mrtbusstopdescription']:
-                    return mrt['mrtstation'], mrt['mrtline']
-                pass
+            return _station_lookup().get(description)
 
     @staticmethod
     def getbusstopdistance(command=None,userlon=None,userlat=None,radius=None):
@@ -133,17 +148,17 @@ class BusStops:
             print('Please input command as a string, radius as float, and coordinates as floats.')
         else:
             allbusstops = []
-            con = sqlite3.connect("data/database/main.db")
-            con.row_factory = sqlite3.Row
-            cur = con.cursor()
-            cur.execute(command)
-            rows = cur.fetchall()
+            rows = _read_bus_rows(command)
+            distances = {}
 
             for busstop in rows:
                 busstoplon = busstop['Longitude']
                 busstoplat = busstop['Latitude']
 
-                distance = haversine(lat1=userlat, lon1=userlon, lat2=busstoplat, lon2=busstoplon) #in kilometers
+                stop_code = busstop['BusStopCode']
+                if stop_code not in distances:
+                    distances[stop_code] = haversine(lat1=userlat, lon1=userlon, lat2=busstoplat, lon2=busstoplon)
+                distance = distances[stop_code]
                 if distance <= radius:
 
                     d = {
@@ -152,6 +167,7 @@ class BusStops:
                         "Description": busstop['Description'],
                         "ServiceNo": busstop['ServiceNo'],
                         "Direction": busstop['Direction'],
+                        "StopSequence": busstop['StopSequence'],
                         "BusStopLat": busstoplat,
                         "BusStopLon": busstoplon
                     }
@@ -159,8 +175,6 @@ class BusStops:
                     allbusstops.append(d)
                 else:
                     pass
-            con.commit()
-            con.close()
             return allbusstops
 
     @staticmethod
@@ -172,11 +186,7 @@ class BusStops:
             print("Please input command as a string.")
         else:
             allmrtbusstops = []
-            con = sqlite3.connect("data/database/main.db")
-            con.row_factory = sqlite3.Row
-            cur = con.cursor()
-            cur.execute(command)
-            rows = cur.fetchall()
+            rows = _read_bus_rows(command)
 
             for mrtbusstop in rows:
                 if ('Stn' in mrtbusstop['Description']) or ('STN' in mrtbusstop['Description']) or ('stn' in mrtbusstop['Description']):
@@ -187,13 +197,12 @@ class BusStops:
                             "BusStopCode": mrtbusstop['BusStopCode'],
                             "Description": mrtbusstop['Description'],
                             "ServiceNo": mrtbusstop['ServiceNo'],
-                            "Direction": mrtbusstop['Direction']
+                            "Direction": mrtbusstop['Direction'],
+                            "StopSequence": mrtbusstop['StopSequence']
                         }
                         allmrtbusstops.append(d)
                 else:
                     pass
-            con.commit()
-            con.close()
             return allmrtbusstops
 
     @staticmethod
@@ -204,12 +213,8 @@ class BusStops:
         if type(command) is not str or type(serviceno) is not str or type(direction) is not str or type(busstopcode) is not str:
             print("Please input all inputs as a string.")
         else:
-            con = sqlite3.connect("data/database/main.db")
-            con.row_factory = sqlite3.Row
-            cur = con.cursor()
-            cur.execute(command, (serviceno,direction,busstopcode))
-            row = cur.fetchone()
-            return row['StopSequence']        
+            rows = _read_bus_rows(command, (serviceno, direction, busstopcode))
+            return rows[0]['StopSequence'] if rows else None
 
 #--------------------------------------
 
@@ -235,7 +240,7 @@ class BusCompanies():
             print('Please input a bus company name as a string')
         elif type(company) is str:
             services = []
-            with open ("data/json/bus_services.json", 'r', encoding = "utf-8") as f:
+            with open (DATA_DIR / 'json' / 'bus_services.json', 'r', encoding = "utf-8") as f:
                 data = json.load(f)
             for d in data:
                 if company == d['Operator']:
@@ -255,7 +260,7 @@ class BusCompanies():
             print('Please input a bus company name as a string')
         elif type(company) is str:
             categories = []
-            with open ("data/json/bus_services.json", 'r', encoding = "utf-8") as f:
+            with open (DATA_DIR / 'json' / 'bus_services.json', 'r', encoding = "utf-8") as f:
                 data = json.load(f)
             for d in data:
                 if company == d['Operator']:

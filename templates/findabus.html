@@ -87,26 +87,11 @@
         try {
             var map = L.map('map').setView([{{ userlat }}, {{ userlon }}], 16);
 
-        // Primary: CARTO dark tiles
-        var cartoTiles = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-            subdomains: 'abcd',
-            maxZoom: 20
-        });
-
-        // Fallback: Standard OSM tiles
-        var osmTiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        // Standard OpenStreetMap tiles use ordinary browser caching and attribution.
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
             maxZoom: 19
-        });
-
-        // Try CARTO first, fallback to OSM on error
-        cartoTiles.on('tileerror', function (error, tile) {
-            console.warn("CARTO tile failed, switching to OSM tiles");
-            map.removeLayer(cartoTiles);
-            osmTiles.addTo(map);
-        });
-        cartoTiles.addTo(map);
+        }).addTo(map);
 
         // User marker
         var userIcon = L.icon({

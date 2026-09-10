@@ -36,6 +36,8 @@ Bus data remains in the bundled SQLite database and CSV/JSON files. Search conne
 
 Normal searches no longer append coordinates to the legacy debug-history files or log the submitted form. Existing history files are retained. Responses containing submitted coordinates use `private, no-store`. The legacy `/coordinates` viewer remains a separate, older feature requiring further review.
 
+Search maps use standard OpenStreetMap tiles with visible attribution and ordinary browser caching. The previous CARTO layer returned watermarked tiles without failing the image request, so its error fallback did not activate. Keep map usage within the [OpenStreetMap tile policy](https://operations.osmfoundation.org/policies/tiles/): interactive viewport requests only, no bulk download or offline prefetch. This community service has no availability guarantee.
+
 Run `python -B -m unittest discover -s tests -v` for search validation, route ordering, missing station mappings, geolocation compatibility and privacy regressions. Tests stub historical-coordinate I/O. GitHub runs these checks on relevant pushes and pull requests. The bundled transit dataset is historical; these checks do not verify current bus schedules or route changes.
 
 ## License

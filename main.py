@@ -1,57 +1,26 @@
-from collections import defaultdict
 from math import isfinite
-from flask import Flask, render_template, request
-
-from functions import BusStops, BusCompanies, DATA_DIR
-from sqlcommands import commands
-
-#-------------------------------------
-
-'''Initiating instance objects needed'''
-
-stops = BusStops()
-companies = BusCompanies(str(DATA_DIR / 'json' / 'bus_services.json'))
-
-'''Creating static mrt data for displaying'''
-
-allmrtbusstops = stops.getmrtbusstops(commands["selectfromdatabase"])
-
-'''Creating static bus data for displaying'''
-
-smrt_numberofservices = len(companies.getbusservices("SMRT"))
-sbst_numberofservices = len(companies.getbusservices("SBST"))
-tts_numberofservices = len(companies.getbusservices("TTS"))
-gas_numberofservices = len(companies.getbusservices("GAS"))
-
-smrt_categories = companies.getcategories("SMRT")
-sbst_categories = companies.getcategories("SBST")
-tts_categories = companies.getcategories("TTS")
-gas_categories = companies.getcategories("GAS")
-
-smrt = companies.countcategories(smrt_categories)
-sbst = companies.countcategories(sbst_categories)
-tts = companies.countcategories(tts_categories)
-gas = companies.countcategories(gas_categories)
-
-'''Creating and inserting relevant data from JSON files to Database file'''
-
-# json_2_db('json/bus_routes.json', 'database/main.db', commands["createbusroutestable"], commands["insertbusroutes"])
-
-# json_2_db('json/bus_services.json', 'database/main.db', commands["createbusservicestable"], commands["insertbusservices"])
-
-# json_2_db('json/bus_stops.json', 'database/main.db', commands["createbusstopstable"], commands["insertbusstops"])
-
-'''Start of Flask WebApp'''
+from flask import Flask, abort, render_template, request
+import transit
 
 app = Flask(__name__, template_folder='templates')
+app.config['MAX_CONTENT_LENGTH'] = 4096
+
+
+@app.before_request
+def protect_legacy_history():
+    filename = (request.view_args or {}).get('filename', '').replace('\\', '/')
+    if request.endpoint == 'static' and filename.split('/')[-1] == 'coordinates.json':
+        abort(404)
 
 @app.after_request
 def add_header(r):
     """Keep submitted coordinates out of shared response caches."""
-    if request.endpoint in {'findabus', 'coordinates'} or request.method != 'GET':
+    if request.endpoint in {'findabus', 'coordinates'} or request.method not in {'GET', 'HEAD'} or r.status_code != 200:
         r.headers['Cache-Control'] = 'private, no-store'
     else:
-        r.headers['Cache-Control'] = 'public, max-age=0'
+        # These GET pages contain no submitted coordinates or user-specific data.
+        r.headers['Cache-Control'] = 'public, max-age=0, s-maxage=86400'
+        r.headers['Vercel-CDN-Cache-Control'] = 'public, max-age=86400'
     return r
 
 
@@ -75,7 +44,11 @@ def getyourlocation():
 
 @app.route('/learnbusfacts', methods=['GET'])
 def learnbusfacts():
-    return render_template('learnbusfacts.html', gas = gas, gas_len = gas_numberofservices, smrt = smrt, smrt_len = smrt_numberofservices, sbst = sbst, sbst_len = sbst_numberofservices, tts = tts, tts_len = tts_numberofservices)
+    try:
+        return render_template('learnbusfacts.html', **transit.facts())
+    except transit.TransitUnavailable:
+        return render_template('getyourlocation.html', ra='0.2',
+                               error='Bus facts are temporarily unavailable. Please try again later.'), 503
 
 
 @app.route('/findabus', methods=['POST'])
@@ -95,39 +68,14 @@ def findabus():
                                error='Enter valid latitude and longitude, and a radius between 0.1 and 1 km.',
                                latitude=manual_lat, longitude=manual_lon), 400
 
-    nearby = stops.getbusstopdistance(commands['selectfromdatabase'], userlat=userlat, userlon=userlon, radius=ra)
-    destinations = defaultdict(list)
-    for station_stop in allmrtbusstops:
-        destinations[(station_stop['ServiceNo'], station_stop['Direction'])].append(station_stop)
-
-    data = []
-    for busstop in nearby:
-        for station_stop in destinations[(busstop['ServiceNo'], busstop['Direction'])]:
-            numberofstops = int(station_stop['StopSequence']) - int(busstop['StopSequence'])
-            if numberofstops <= 0:
-                continue
-            station = stops.description_2_mrtname(station_stop['Description'])
-            if station is None:
-                continue
-            mrtstation, mrtline = station
-            if 'North-South' in mrtline: mrt_color = '#d42e12'
-            elif 'East-West' in mrtline: mrt_color = '#009645'
-            elif 'North-East' in mrtline: mrt_color = '#9900aa'
-            elif 'Circle' in mrtline: mrt_color = '#fa9e0d'
-            elif 'Downtown' in mrtline: mrt_color = '#005ec4'
-            elif 'Thomson' in mrtline: mrt_color = '#9d5b25'
-            else: mrt_color = '#64748b'
-            data.append({
-                'mrt_station': mrtstation, 'mrt_line': mrtline, 'mrt_color': mrt_color,
-                'walkdistance': f"{int(busstop['Distance'] * 1000)}m",
-                'board_busstopdescription': busstop['Description'].title(),
-                'busstopcode': busstop['BusStopCode'], 'busservice': busstop['ServiceNo'],
-                'numberofstops': numberofstops,
-                'alight_busstopdescription': station_stop['Description'].title(),
-                'busstoplat': busstop['BusStopLat'], 'busstoplon': busstop['BusStopLon'],
-            })
-    data.sort(key=lambda item: int(item['walkdistance'][:-1]))
-    return render_template('findabus.html', userlon=userlon, userlat=userlat, data=data, ra=ra)
+    try:
+        result = transit.search(userlat, userlon, ra)
+    except transit.TransitUnavailable:
+        return render_template('getyourlocation.html', ra=str(ra),
+                               error='Bus search is temporarily unavailable. Please try again later.',
+                               latitude=manual_lat, longitude=manual_lon), 503
+    return render_template('findabus.html', userlon=userlon, userlat=userlat,
+                           data=result['results'], has_more=result['has_more'], ra=ra)
 
 
 @app.route('/help', methods=['GET'])
@@ -137,15 +85,8 @@ def help():
 
 @app.route('/coordinates', methods=['GET'])
 def coordinates():
-    try:
-        with open('data/txt/coordinates.txt', 'r') as f:
-            data = f.readlines()
-            if data:  # Only pop if there's data
-                data.pop(0)
-        return render_template('coordinates.html', data=data)
-    except IOError:
-        return render_template('coordinates.html', data=[])
+    return render_template('coordinates.html'), 410
 
 
 if __name__ == '__main__':
-    app.run("0.0.0.0", debug=True)
+    app.run("127.0.0.1", debug=False)

@@ -61,6 +61,11 @@
             {% endif %}
         </div>
 
+        {% if has_more %}
+        <p role="status" class="text-muted" style="margin-bottom: 1rem;">
+            Showing the closest 200 routes. Choose a smaller radius to narrow the results.
+        </p>
+        {% endif %}
         {% if data|length > 0 %}
         <div id="results-container" class="animate-fade-in" style="animation-delay: 0.2s;"></div>
         {% else %}
@@ -80,9 +85,6 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <script>
-        console.log("Initializing FindABus Map...");
-        console.log("User Location: Lat {{ userlat }}, Lon {{ userlon }}");
-        console.log("Search Radius: {{ ra }} km");
 
         try {
             var map = L.map('map').setView([{{ userlat }}, {{ userlon }}], 16);
@@ -114,7 +116,6 @@
             radius: {{ ra }} * 1000
             }).addTo(map);
 
-        console.log("Map initialized. Adding {{ data|length }} bus stops...");
 
         // Add bus stops from data
         var busStops = {{ data | tojson }};
@@ -131,7 +132,6 @@
                 .addTo(map);
         });
 
-        console.log("All markers added successfully.");
 
         // Ensure map renders correctly after container becomes visible
         setTimeout(function () {

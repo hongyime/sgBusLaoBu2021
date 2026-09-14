@@ -3,8 +3,6 @@ from functools import lru_cache
 import json
 import os
 
-import requests
-
 MAX_RESPONSE_BYTES = 192 * 1024
 MAX_RESULTS = 200
 
@@ -14,6 +12,9 @@ class TransitUnavailable(Exception):
 
 
 def _rpc(name: str, parameters: dict) -> dict:
+    # Static pages must not pay the HTTP client's import cost on a cold start.
+    import requests
+
     url = os.environ.get('SUPABASE_URL', '').rstrip('/')
     key = os.environ.get('SUPABASE_PUBLISHABLE_KEY', '')
     if not url.startswith('https://') or not key:
@@ -34,7 +35,7 @@ def _rpc(name: str, parameters: dict) -> dict:
             if not isinstance(result, dict):
                 raise TransitUnavailable('Transit response is unavailable.')
             return result
-    except (requests.RequestException, ValueError) as exc:
+    except (requests.RequestException, ValueError):
         raise TransitUnavailable('Transit service is temporarily unavailable.') from None
 
 

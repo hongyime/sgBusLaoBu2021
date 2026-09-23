@@ -1,0 +1,54 @@
+name: Keep Supabase Alive
+
+on:
+  schedule:
+    - cron: "0 8 * * *" # Every day at 08:00 UTC — within 7-day pause window
+  workflow_dispatch:
+
+jobs:
+  keepalive:
+    name: DB transaction keepalive
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: INSERT + DELETE to keepalive_logs
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          if [[ -z "$SUPABASE_URL" ]]; then
+            echo "::error::SUPABASE_URL secret is not set."
+            exit 1
+          fi
+
+          echo "Writing keepalive row to $SUPABASE_URL ..."
+
+          HTTP_INSERT=$(curl -s -o /tmp/insert.json -w "%{http_code}" \
+            -X POST \
+            --max-time 30 \
+            "$SUPABASE_URL/rest/v1/keepalive_logs" \
+            -H "apikey: $SUPABASE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_KEY" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            -d '{"source":"github-actions"}')
+
+          echo "INSERT HTTP: $HTTP_INSERT"
+          cat /tmp/insert.json
+
+          if [[ "$HTTP_INSERT" != "201" ]]; then
+            echo "::error::INSERT failed (HTTP $HTTP_INSERT) — run supabase/migrations/001_keepalive.sql in Supabase SQL editor first."
+            exit 1
+          fi
+
+          # Delete rows older than 7 days to keep the table from growing
+          CUTOFF=$(date -u -d '7 days ago' '+%Y-%m-%dT%H:%M:%SZ')
+          curl -s -o /dev/null \
+            -X DELETE \
+            --max-time 30 \
+            "$SUPABASE_URL/rest/v1/keepalive_logs?pinged_at=lt.$CUTOFF" \
+            -H "apikey: $SUPABASE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_KEY" \
+            -H "Prefer: return=minimal"
+
+          echo "✅ Supabase keepalive complete"
